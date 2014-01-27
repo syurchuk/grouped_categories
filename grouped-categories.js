@@ -488,7 +488,7 @@ tickProto.render = function (index, old, opacity) {
     lvlSize = axis.groupSize(depth);
     attrs = horiz ? {
       x: (minPos.x + maxPos.x) / 2,
-      y: size + lvlSize / 2 + baseLine - bBox.height / 2 - 4
+      y: size + lvlSize / 2
     } : {
 			x: size + lvlSize / 2,
 			y: (minPos.y + maxPos.y - bBox.height) / 2  + baseLine
