@@ -1,16 +1,17 @@
 /**
- * Grouped Categories v0.0.1 (2013-02-22)
+ * Grouped Categories v1.0.3 (2014-03-14)
  *
  * (c) 2012-2013 Black Label
  *
  * License: Creative Commons Attribution (CC)
  */
-(function(HC){
+(function(HC, HA){
 /*jshint expr:true, boss:true */
 var UNDEFINED = void 0,
     mathRound = Math.round,
     mathMin   = Math.min,
     mathMax   = Math.max,
+    merge     = HC.merge,
 
     // cache prototypes
     axisProto  = HC.Axis.prototype,
@@ -27,6 +28,7 @@ var UNDEFINED = void 0,
 
 
 function Category(obj, parent) {
+	this.userOptions = deepClone(obj);
   this.name = obj.name || obj;
   this.parent = parent;
 
@@ -151,29 +153,7 @@ function walk(arr, key, fn) {
 }
 
 function deepClone(thing) {
-    var other, key;
-   
-    function isArray(obj) {
-        return Object.prototype.toString.call(obj) === '[object Array]';
-    }
-
-    function isString(obj) {
-        return Object.prototype.toString.call(obj) === '[object String]';
-    }
-
-    // check for type, array or object
-    other = isArray(thing) ? [] : {};
-
-    for (key in thing) {
-        if (thing.hasOwnProperty(key)) {
-            if (isString(thing[key])) {
-                other[key] = thing[key];
-            } else {
-                other[key] = deepClone(thing[key]);
-            }           
-        }        
-    };
-    return other;
+    return JSON.parse(JSON.stringify(thing));
 }
 
 //
@@ -242,7 +222,7 @@ axisProto.render = function () {
       left    = axis.left,
       right   = left + axis.width,
       bottom  = top + axis.height,
-      visible = axis.hasVisibleSeries,
+      visible = axis.hasVisibleSeries || axis.hasData,
       depth   = axis.labelsDepth,
       grid    = axis.labelsGrid,
       horiz   = axis.horiz,
@@ -258,7 +238,8 @@ axisProto.render = function () {
   if (!grid) {
     grid = axis.labelsGrid = axis.chart.renderer.path()
       .attr({
-        strokeWidth: options.lineWidth,
+        strokeWidth: options.lineWidth, // < 4.0.3
+        'stroke-width': options.lineWidth, // 4.0.3+ #30
         stroke: options.lineColor
       })
       .add(axis.axisGroup);
@@ -298,7 +279,9 @@ axisProto.render = function () {
       tick.destroyed = 0;
     }
     else
-      tick.label.show();
+	  tick.label.attr({
+		visibility: visible ? 'visible' : 'hidden'
+	  });
   });
 };
 
@@ -389,6 +372,7 @@ tickProto.addGroupedLabels = function (category) {
       options = axis.options.labels,
       useHTML = options.useHTML,
       css     = options.style,
+      userAttr= options.groupedOptions,
       attr    = { align: 'center' , rotation: options.rotation },
       size    = axis.horiz ? 'height' : 'width',
       depth   = 0,
@@ -399,10 +383,13 @@ tickProto.addGroupedLabels = function (category) {
     if (depth > 0 && !category.tick) {
       // render label element
       this.value = category.name;
-      var name = options.formatter ? options.formatter.call(this, category) : category.name;
+      var name = options.formatter ? options.formatter.call(this, category) : category.name,
+      	  hasOptions = userAttr && userAttr[depth-1],
+     	  mergedAttrs =  hasOptions ? merge(attr, userAttr[depth-1] ) : attr,
+     	  mergedCSS = hasOptions && userAttr[depth-1].style ? merge(css, userAttr[depth-1].style ) : css;
       label = chart.renderer.text(name, 0, 0, useHTML)
-        .attr(attr)
-        .css(css)
+        .attr(mergedAttrs)
+        .css(mergedCSS)
         .add(axis.labelGroup);
 
       // tick properties
@@ -433,9 +420,11 @@ tickProto.addGroupedLabels = function (category) {
 
 // set labels position & render categories grid
 tickProto.render = function (index, old, opacity) {
-  _tickRender.call(this, index, false, opacity);
+  _tickRender.call(this, index, old, opacity);
 
-  if (!this.axis.isGrouped || !this.axis.categories[this.pos] || this.pos > this.axis.max)
+  var treeCat = this.axis.categories[this.pos];
+  
+  if (!this.axis.isGrouped || !treeCat || this.pos > this.axis.max)
     return;
 
   var tick    = this,
@@ -457,6 +446,8 @@ tickProto.render = function (index, old, opacity) {
       depth   = 1,
       gridAttrs,
       lvlSize,
+      minPos,
+      maxPos,
       attrs,
       bBox;
 
@@ -479,11 +470,22 @@ tickProto.render = function (index, old, opacity) {
 
   size = start + size;
 
+  function fixOffset(group, treeCat, tick){
+  		var ret = 0;
+			if(isFirst) {
+					ret = HA.inArray(treeCat.name, treeCat.parent.categories);
+					ret = ret < 0 ? 0 : ret;
+					return ret;
+			} 
+			return ret;
+  }
 
 
   while (group = group.parent) {
+  	var fix = fixOffset(group, treeCat, tick);
+  	
     minPos  = tickPosition(tick, mathMax(group.startAt - 1, min - 1));
-    maxPos  = tickPosition(tick, mathMin(group.startAt + group.leaves - 1, max));
+    maxPos  = tickPosition(tick, mathMin(group.startAt + group.leaves - 1 - fix, max));
     bBox    = group.label.getBBox();
     lvlSize = axis.groupSize(depth);
     attrs = horiz ? {
@@ -494,14 +496,16 @@ tickProto.render = function (index, old, opacity) {
 			y: (minPos.y + maxPos.y - bBox.height) / 2  + baseLine
 		};
 
-    group.label.attr(attrs);
-
-    if (grid) {
-      gridAttrs = horiz ?
-        [maxPos.x, size, maxPos.x, size + lvlSize] :
-        [size, maxPos.y, size + lvlSize, maxPos.y];
-
-      addGridPart(grid, gridAttrs);
+		if(!isNaN(attrs.x) && !isNaN(attrs.y)){ 
+			group.label.attr(attrs);
+	
+			if (grid) {
+				gridAttrs = horiz ?
+					[maxPos.x, size, maxPos.x, size + lvlSize] :
+					[size, maxPos.y, size + lvlSize, maxPos.y];
+	
+				addGridPart(grid, gridAttrs);
+			}
     }
 
     size += lvlSize;
@@ -526,4 +530,4 @@ tickProto.getLabelSize = function () {
     return _tickGetLabelSize.call(this);
 };
 
-}(Highcharts));
+}(Highcharts, HighchartsAdapter));
